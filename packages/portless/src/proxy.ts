@@ -76,22 +76,53 @@ const PORTLESS_HOPS_HEADER = "x-portless-hops";
  */
 const MAX_PROXY_HOPS = 5;
 
+/** Authority (hostname, plus port when non-default) of a route's tailscaleUrl, or undefined if unset or invalid. */
+function tailscaleAuthority(tailscaleUrl: string | undefined): string | undefined {
+  if (!tailscaleUrl) return undefined;
+  try {
+    // `URL` lowercases the host and drops the default `:443`, so the value is
+    // already in the normalized form findRoute compares against.
+    return new URL(tailscaleUrl).host;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
- * Find the route matching a given host. Matches exact hostname first, then
- * falls back to wildcard subdomain matching (e.g. tenant.myapp.localhost
- * matches a route registered for myapp.localhost).
- *
- * When `strict` is true, only exact matches are returned; unregistered
- * subdomain prefixes will not fall back to the base service.
+ * Normalize a request authority for comparison: lowercase it (Host is
+ * case-insensitive) and drop an explicit `:443`, the default HTTPS port that
+ * `URL` strips from a route's stored tailscale authority. Without this a
+ * mixed-case Host never matches, and an explicit `dev.ts.net:443` misses the
+ * authority tier and falls through to the port-insensitive hostname tier,
+ * resolving to the wrong app when several routes share a `.ts.net` hostname on
+ * different ports.
+ */
+function normalizeAuthority(host: string): string {
+  const lower = host.toLowerCase();
+  return lower.endsWith(":443") ? lower.slice(0, -":443".length) : lower;
+}
+
+/**
+ * Find the route matching a request's host, which may include a port. Match
+ * order: local hostname, tailscale authority (hostname and port), tailscale
+ * hostname ignoring port, then wildcard subdomain. The authority tier
+ * disambiguates apps sharing a `.ts.net` hostname on different ports; the
+ * hostname tier keeps other-port requests resolving. `strict` drops the wildcard.
+ * All comparisons run against the normalized authority so they are
+ * case-insensitive and treat an explicit `:443` as the default HTTPS port.
  */
 function findRoute(
-  routes: { hostname: string; port: number }[],
+  routes: { hostname: string; port: number; tailscaleUrl?: string }[],
   host: string,
   strict?: boolean
 ): { hostname: string; port: number } | undefined {
+  const authority = normalizeAuthority(host);
+  const hostname = authority.split(":")[0];
   return (
-    routes.find((r) => r.hostname === host) ||
-    (strict ? undefined : routes.find((r) => host.endsWith("." + r.hostname)))
+    routes.find((r) => r.hostname.toLowerCase() === hostname) ||
+    routes.find((r) => tailscaleAuthority(r.tailscaleUrl) === authority) ||
+    routes.find((r) => tailscaleAuthority(r.tailscaleUrl)?.split(":")[0] === hostname) ||
+    (strict ? undefined : routes.find((r) => hostname.endsWith("." + r.hostname.toLowerCase())))
   );
 }
 
@@ -127,7 +158,8 @@ export function createProxyServer(options: ProxyServerOptions): ProxyServer {
     res.setHeader(PORTLESS_HEADER, "1");
 
     const routes = getRoutes();
-    const host = getRequestHost(req).split(":")[0];
+    const rawHost = getRequestHost(req);
+    const host = rawHost.split(":")[0];
 
     if (!host) {
       res.writeHead(400, { "Content-Type": "text/plain" });
@@ -158,7 +190,7 @@ export function createProxyServer(options: ProxyServerOptions): ProxyServer {
       return;
     }
 
-    const route = findRoute(routes, host, strict);
+    const route = findRoute(routes, rawHost, strict);
 
     if (!route) {
       const safeHost = escapeHtml(host);
@@ -286,8 +318,7 @@ export function createProxyServer(options: ProxyServerOptions): ProxyServer {
     }
 
     const routes = getRoutes();
-    const host = getRequestHost(req).split(":")[0];
-    const route = findRoute(routes, host, strict);
+    const route = findRoute(routes, getRequestHost(req), strict);
 
     if (!route) {
       socket.destroy();
