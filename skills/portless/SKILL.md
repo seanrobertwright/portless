@@ -169,7 +169,7 @@ Most frameworks (Next.js, Express, Nuxt, etc.) respect the `PORT` env var automa
 
 ### State directory
 
-Portless stores its state (routes, PID file, port file) in `~/.portless`. Override with the `PORTLESS_STATE_DIR` environment variable.
+Portless stores its state (routes, PID file, port file) in `~/.portless`. When the proxy runs under sudo, this remains the invoking user's home directory so unprivileged apps and the proxy share route registrations. Override with the `PORTLESS_STATE_DIR` environment variable.
 
 ### Environment variables
 
@@ -199,7 +199,7 @@ portless proxy start --no-tls                       # Disable HTTPS (plain HTTP)
 portless trust                                      # Add CA to trust store later
 ```
 
-On Linux, `portless trust` supports Debian/Ubuntu, Arch, Fedora/RHEL/CentOS, and openSUSE (via `update-ca-certificates` or `update-ca-trust`). On Windows, it uses `certutil` to add the CA to the system trust store.
+On Linux, `portless trust` supports Debian/Ubuntu, Arch, Fedora/RHEL/CentOS, and openSUSE (via `update-ca-certificates` or `update-ca-trust`). On Windows, it uses `certutil` to add the CA to the system trust store. On WSL, it updates both the Linux trust store and the Windows current-user Root store so Windows browsers trust portless HTTPS certificates.
 
 ### LAN mode
 
@@ -424,7 +424,7 @@ This adds the portless local CA to your system trust store. After that, restart 
 portless clean
 ```
 
-Stops the proxy if needed, removes the portless CA from the trust store (when portless added it), deletes known files under state directories, and removes the portless `/etc/hosts` block. May require `sudo` on macOS/Linux.
+Stops the proxy if needed, removes the portless CA from the trust store (when portless added it), deletes known files under state directories, and removes the portless `/etc/hosts` block. May require `sudo` on macOS/Linux. If trust-store removal fails, portless retains its CA certificate and key so a later `portless clean` can safely retry.
 
 ### Proxy loop (508 Loop Detected)
 
